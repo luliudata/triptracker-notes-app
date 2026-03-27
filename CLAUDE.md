@@ -27,9 +27,11 @@
 ## Architecture
 
 ### Single-component pattern
-The entire app UI lives in **`App.tsx`** (~2300+ lines). All screens are conditionally rendered based on a `screen` state variable. Wrapped in `GestureHandlerRootView` for gesture-based features.
+
+The entire app UI lives in `**App.tsx`** (~2300+ lines). All screens are conditionally rendered based on a `screen` state variable. Wrapped in `GestureHandlerRootView` for gesture-based features.
 
 ### Screens
+
 - `trips` — Trip list (manual/upcoming sort, empty state with onboarding hints)
 - `home` — Trip home (checklists, AI planner, transport/acc/notes/expenses cards)
 - `list` — Category checklist view (up/down reorder, inline add, voice input)
@@ -38,17 +40,20 @@ The entire app UI lives in **`App.tsx`** (~2300+ lines). All screens are conditi
 - `add_trip` / `edit_trip` / `add_category` / `share` / `notes` / `expenses` — Other modals
 
 ### Data Model
+
 - **Trip**: `transports?: TransportInfo[]`, `accommodations?: AccommodationInfo[]` (arrays, not single objects)
 - **TransportInfo**: `type`, `flightNumber`, `from`, `to`, `departureTime`, `arrivalTime`
 - **AccommodationInfo**: `name`, `address`, `checkIn`, `checkOut`
 - Categories use colored dots (minimalist); trips use emojis via `rn-emoji-keyboard`
 
 ### Data Persistence
+
 - All data stored locally via `AsyncStorage` (no cloud, no accounts)
 - Persisted: trips, language preference, sort mode
 - Loaded on app start with loading spinner
 
 ### Privacy
+
 - **No data collection** — no analytics, no tracking, no telemetry
 - **No accounts** — no login, no signup
 - **No cloud storage** — everything on-device
@@ -57,12 +62,14 @@ The entire app UI lives in **`App.tsx`** (~2300+ lines). All screens are conditi
 ## Key Features
 
 ### Transport & Accommodation
+
 - **Multiple items per trip** — Add 2 flights, 4 hotels, etc.
 - **Drill-down UX** — Home shows one Transport card and one Accommodation card; tap to open list screen
 - **List screens** (`transport_list`, `acc_list`) — View all items, tap to edit, trash to delete, "+ Add" at bottom
 - **From/To fields** — Transport has departure and destination for better AI planning
 
 ### Trip Creation/Edit
+
 - **Emoji picker** — `rn-emoji-keyboard` opens on tap (no text keyboard); full emoji set
 - **Color picker** — Single row of 7 presets + palette icon → custom color modal (hue slider + saturation panel). Use `onCompleteJS` to avoid crash.
 - **Date placeholders** — "Pick a date" / "选择日期" (not format hints like YYYY-MM-DD)
@@ -71,6 +78,7 @@ The entire app UI lives in **`App.tsx`** (~2300+ lines). All screens are conditi
 - **Delete trip** — With bilingual confirmation alert
 
 ### Categories
+
 - **Drag-to-reorder** — "Reorder" button opens modal with `DraggableFlatList`; long-press to drag
 - **Colored dots** — No emoji icons; minimalist style
 - **Delete confirmation** — Shows item count warning before deletion
@@ -78,42 +86,51 @@ The entire app UI lives in **`App.tsx`** (~2300+ lines). All screens are conditi
 - **Swipe-to-delete** — Swipe left on checklist items to reveal red delete action (`Swipeable` from gesture-handler)
 
 ### Home Cards
+
 - **All cards are fully tappable** — Notes, Expenses, Transport, Accommodation, Trip info
 - **No redundant edit icons** — removed pencil/edit icons since cards are tappable
 
 ### AI Planner
+
 - **Context** — Feeds transport (from/to, dates) and accommodation details into prompt
 - **Structured format** — Day headers, bullet points, Morning/Afternoon/Evening groups
 - **Actions** — Share (PDF), Copy, Save to Notes below generated itinerary
 - **Save to Notes** — Appends to trip notes; user sees it in Notes card on home
 
 ### Haptic Feedback
+
 - **Light tap** — toggle checkbox, reorder items, drag categories
 - **Medium tap** — add new item
 - **Warning vibration** — delete item, category, or trip
 
 ### Trip List
+
 - **Pull-to-refresh** — Pull down on trip list to reload data from AsyncStorage (`RefreshControl`)
 
 ### Notes
+
 - **Terminology** — Chinese uses 备忘录 consistently (not 备注)
 
 ### Share
+
 - **PDF by default** — Share button generates PDF and opens native share sheet (save to Files, share via any app)
 - **shareAsPDF(title, text)** — Uses expo-print + expo-sharing; single flow for trip share and AI itinerary
 - Iterates over `transports` and `accommodations` arrays; shows count in checkboxes
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `App.tsx` | Main app — all screens, state, handlers, styles |
-| `services/gemini.ts` | Gemini API (dev direct / prod proxy) |
-| `server/gemini-proxy/worker.js` | Cloudflare Worker proxy |
-| `server/gemini-proxy/wrangler.toml` | Cloudflare deployment config |
-| `server/PROXY-SETUP.md` | Proxy setup guide and useful commands |
-| `.env` | `EXPO_PUBLIC_GEMINI_PROXY_URL` (gitignored) |
-| `MVP-REVIEW.md` | Pre-launch checklist (14/15 done) |
+
+| File                                | Purpose                                                                                  |
+| ----------------------------------- | ---------------------------------------------------------------------------------------- |
+| `App.tsx`                           | Main app — all screens, state, handlers, styles                                          |
+| `services/gemini.ts`                | Gemini API (dev direct / prod proxy)                                                     |
+| `server/gemini-proxy/worker.js`     | Cloudflare Worker proxy                                                                  |
+| `server/gemini-proxy/wrangler.toml` | Cloudflare deployment config                                                             |
+| `server/PROXY-SETUP.md`             | Proxy setup guide and useful commands                                                    |
+| `.env`                              | `EXPO_PUBLIC_GEMINI_PROXY_URL` (gitignored)                                              |
+| `.gitignore`                        | Ignores `.env`, signing keys (`*.p8`, `AuthKey_*.p8`, `*.cer`, etc.), `credentials.json` |
+| `MVP-REVIEW.md`                     | Pre-launch checklist (14/15 done)                                                        |
+
 
 ## Conventions
 
@@ -132,11 +149,13 @@ npx expo start --clear   # Use --clear if env/code changes aren't picked up
 ```
 
 ### Production (proxy mode — what .env currently uses)
+
 ```
 EXPO_PUBLIC_GEMINI_PROXY_URL=https://suixing-gemini-proxy.suixing-notes.workers.dev
 ```
 
 ### Development (direct mode — optional, faster for testing)
+
 ```
 EXPO_PUBLIC_GEMINI_API_KEY="your-key-here"
 ```
@@ -165,3 +184,4 @@ EXPO_PUBLIC_GEMINI_API_KEY="your-key-here"
 - **Code/env changes not picked up** — Run `npx expo start --clear` to clear Metro cache
 - **Color picker crash** — Must use `onCompleteJS` instead of `onComplete` for reanimated-color-picker
 - **Proxy not working** — Check `[Gemini] Calling API... (proxy)` in console; if `(direct)`, proxy URL may not be set in `.env`
+
