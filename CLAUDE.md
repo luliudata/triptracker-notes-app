@@ -4,7 +4,7 @@
 
 **随行Notes** — A bilingual (Chinese/English) **travel trip planner and checklist app** built with React Native / Expo. Users create trips, manage category-based checklists, track multiple transports and accommodations, notes, and expenses. Includes AI-powered itinerary generation and voice input via Google Gemini.
 
-**App name**: TripTracker (App Store display name; UK first, China later)
+**App name**: TripTracker Notes (`expo.name` + App Store listing; UK first, China later)
 **Default language**: English (user can toggle to Chinese; preference persists)
 
 ## Tech Stack
