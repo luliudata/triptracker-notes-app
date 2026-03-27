@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,9 +12,10 @@ import {
   Platform,
   Modal,
   Linking,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import DraggableFlatList, { RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -23,8 +24,10 @@ import ColorPicker, { Panel1, HueSlider, Preview } from 'reanimated-color-picker
 import EmojiPicker from 'rn-emoji-keyboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { generateItinerary, processVoiceAudio, isConfigured } from './services/gemini';
 
 // --- Types ---
@@ -152,14 +155,16 @@ const DICT = {
     past: '历史行程',
     flight: '交通',
     accommodation: '住宿',
-    addFlight: '添加交通',
-    addAcc: '添加住宿',
+    addFlight: '添加',
+    addFlightEmpty: '添加交通',
+    addAcc: '添加',
+    addAccEmpty: '添加住宿',
     flightNumber: '班次/航班号 (如: BA123)',
     fromPlace: '出发地',
     toPlace: '目的地',
     depTime: '出发时间',
     arrTime: '到达时间',
-    hotelName: '酒店/住址名称',
+    hotelName: '住宿名称',
     address: '详细地址',
     checkIn: '入住日期',
     checkOut: '退房日期',
@@ -172,10 +177,14 @@ const DICT = {
     archive: '归档',
     unarchive: '取消归档',
     archivedTrips: '已归档',
+    deleteTrip: '删除行程',
+    deleteTripConfirm: '确定永久删除此行程？所有清单、交通、住宿数据将一并删除，此操作不可撤销。',
     duplicate: '作为模板复制',
     sortByUpcoming: '按近期排序',
     sortManually: '手动排序',
     shareVia: '通过...分享',
+    shareToWechat: '微信',
+    wechatCopyPrompt: '已复制！打开微信粘贴即可分享。',
     notes: '备忘录',
     expenses: '记账',
     addExpense: '添加支出',
@@ -199,14 +208,18 @@ const DICT = {
     addItemInlinePlaceholder: '添加一项（点右上角 + 可粘贴多条）',
     editItemNamePlaceholder: '项目名称',
     notesPlaceholder: '记录行程备忘...',
-    destinationPlaceholder: '如：东京之旅',
+    destinationPlaceholder: '如：西安之行',
     addItemModalPlaceholder: '输入项目或粘贴多行列表...',
     dateTimePlaceholder: '选择日期和时间',
     dateOnlyPlaceholder: '选择日期',
+    emptyTripsTitle: '开始规划你的旅程',
+    emptyTripsSubtitle: '点击下方按钮创建第一个行程',
+    emptyTripsHint1: '为每次旅行添加清单、交通和住宿信息',
+    emptyTripsHint2: 'AI 可以根据你的信息自动规划行程',
+    emptyTripsHint3: '支持分享行程为 PDF',
     defaultCategories: [
       { id: 'documents', name: '证件材料', icon: '📄', color: '#3F51B5' },
       { id: 'packing', name: '行李准备', icon: '🧳', color: '#039BE5' },
-      { id: 'transport', name: '交通出行', icon: '🚌', color: '#00897B' },
       { id: 'food', name: '想吃的店', icon: '🍜', color: '#F4511E' },
       { id: 'places', name: '想去的地方', icon: '📍', color: '#D50000' },
       { id: 'shopping', name: '购物清单', icon: '🛒', color: '#8E24AA' },
@@ -239,16 +252,18 @@ const DICT = {
     back: 'Back',
     upcoming: 'Upcoming',
     past: 'Past Trips',
-    flight: 'Transportation',
+    flight: 'Transport',
     accommodation: 'Accommodation',
-    addFlight: 'Add Transport',
-    addAcc: 'Add Accommodation',
+    addFlight: 'Add',
+    addFlightEmpty: 'Add transport',
+    addAcc: 'Add',
+    addAccEmpty: 'Add accommodation',
     flightNumber: 'Transport No. (e.g. BA123)',
     fromPlace: 'From',
     toPlace: 'To',
     depTime: 'Departure',
     arrTime: 'Arrival',
-    hotelName: 'Hotel/Address Name',
+    hotelName: 'Accommodation Name',
     address: 'Full Address',
     checkIn: 'Check-in',
     checkOut: 'Check-out',
@@ -259,6 +274,8 @@ const DICT = {
     includeFlight: 'Include Transport',
     includeAcc: 'Include Accommodation',
     archive: 'Archive',
+    deleteTrip: 'Delete Trip',
+    deleteTripConfirm: 'Permanently delete this trip? All checklists, transport, and accommodation data will be lost. This cannot be undone.',
     unarchive: 'Unarchive',
     archivedTrips: 'Archived',
     duplicate: 'Use as Template',
@@ -290,14 +307,18 @@ const DICT = {
     addItemInlinePlaceholder: 'Add an item (tap + to paste multiple)',
     editItemNamePlaceholder: 'Item name',
     notesPlaceholder: 'Trip notes...',
-    destinationPlaceholder: 'e.g. Tokyo trip',
+    destinationPlaceholder: 'e.g. Xi\'an trip',
     addItemModalPlaceholder: 'Type an item or paste a list...',
     dateTimePlaceholder: 'Pick a date & time',
     dateOnlyPlaceholder: 'Pick a date',
+    emptyTripsTitle: 'Plan your next adventure',
+    emptyTripsSubtitle: 'Tap the button below to create your first trip',
+    emptyTripsHint1: 'Add checklists, transport & accommodation for each trip',
+    emptyTripsHint2: 'AI can auto-generate an itinerary from your details',
+    emptyTripsHint3: 'Share your trip as a PDF',
     defaultCategories: [
       { id: 'documents', name: 'Documents', icon: '📄', color: '#3F51B5' },
       { id: 'packing', name: 'Packing', icon: '🧳', color: '#039BE5' },
-      { id: 'transport', name: 'Transportation', icon: '🚌', color: '#00897B' },
       { id: 'food', name: 'Places to Eat', icon: '🍜', color: '#F4511E' },
       { id: 'places', name: 'Places to Visit', icon: '📍', color: '#D50000' },
       { id: 'shopping', name: 'Shopping', icon: '🛒', color: '#8E24AA' },
@@ -307,30 +328,12 @@ const DICT = {
   },
 };
 
-const INITIAL_TRIPS: Trip[] = [
-  {
-    id: 'trip-1',
-    destination: "Eddie的中国之旅 / Eddie's first trip to China",
-    startDate: '2026-04-15',
-    endDate: '2026-05-05',
-    icon: '🇨🇳',
-    color: '#E67C73',
-    categories: DICT.zh.defaultCategories,
-    items: {
-      documents: [{ id: '0', text: '护照 & 签证 / Passport & Visa', completed: false }],
-      packing: [{ id: '1', text: '充电宝 / Powerbank', completed: true }],
-      errands: [{ id: '6', text: '开通国际漫游 / Roaming', completed: true }],
-    },
-    notes: "Flight to Xi'an via Beijing. Need to pick up tickets at the station.",
-    expenses: [
-      { id: 'e1', amount: 800, description: 'Flight', currency: '£' },
-      { id: 'e2', amount: 120, description: 'Hotel Deposit', currency: '£' },
-    ],
-  },
-];
+const DEFAULT_CATEGORY_IDS = new Set(['documents', 'packing', 'transport', 'food', 'places', 'shopping', 'gifts', 'errands']);
+
+const INITIAL_TRIPS: Trip[] = [];
 
 export default function App() {
-  const [lang, setLang] = useState<Language>('zh');
+  const [lang, setLang] = useState<Language>('en');
   const [screen, setScreen] = useState<Screen>('trips');
   const [trips, setTrips] = useState<Trip[]>(INITIAL_TRIPS);
   const [activeTripId, setActiveTripId] = useState<string | null>(null);
@@ -345,7 +348,7 @@ export default function App() {
   const [editAccData, setEditAccData] = useState<AccommodationInfo>({ name: '', address: '', checkIn: '', checkOut: '' });
   const [editAccIndex, setEditAccIndex] = useState(-1);
   const [editNotesData, setEditNotesData] = useState('');
-  const [newExpenseData, setNewExpenseData] = useState<Partial<Expense>>({ amount: 0, description: '', currency: '¥' });
+  const [newExpenseData, setNewExpenseData] = useState<Partial<Expense>>({ amount: 0, description: '', currency: '£' });
   const [shareSelection, setShareSelection] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState(false);
   const [sortMode, setSortMode] = useState<'upcoming' | 'manual'>('upcoming');
@@ -364,9 +367,56 @@ export default function App() {
   const [aiItinerary, setAiItinerary] = useState<string | null>(null);
   const [isGeneratingItinerary, setIsGeneratingItinerary] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [savedTrips, savedLang, savedSort] = await Promise.all([
+          AsyncStorage.getItem('suixing_trips'),
+          AsyncStorage.getItem('suixing_lang'),
+          AsyncStorage.getItem('suixing_sort'),
+        ]);
+        if (savedTrips) setTrips(JSON.parse(savedTrips));
+        if (savedLang === 'en' || savedLang === 'zh') setLang(savedLang);
+        if (savedSort === 'manual' || savedSort === 'upcoming') setSortMode(savedSort);
+      } catch (e) {
+        console.error('Failed to load data:', e);
+      } finally {
+        setDataLoaded(true);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    if (!dataLoaded) return;
+    AsyncStorage.setItem('suixing_trips', JSON.stringify(trips)).catch(console.error);
+  }, [trips, dataLoaded]);
+
+  useEffect(() => {
+    if (!dataLoaded) return;
+    AsyncStorage.setItem('suixing_lang', lang).catch(console.error);
+  }, [lang, dataLoaded]);
+
+  useEffect(() => {
+    if (!dataLoaded) return;
+    AsyncStorage.setItem('suixing_sort', sortMode).catch(console.error);
+  }, [sortMode, dataLoaded]);
 
   const t = DICT[lang];
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const saved = await AsyncStorage.getItem('suixing_trips');
+      if (saved) setTrips(JSON.parse(saved));
+    } catch (e) { console.error(e); }
+    setRefreshing(false);
+  }, []);
 
   const formatDateForInput = (date: Date) => date.toISOString().split('T')[0];
   const applyDateValue = (field: 'start' | 'end' | 'dep' | 'arr' | 'checkIn' | 'checkOut', value: string) => {
@@ -393,10 +443,10 @@ export default function App() {
     const yyyy = String(d.getFullYear());
     return `${dd}/${mm}/${yyyy}`;
   };
-  const parseDateSafe = (dateStr: string): Date => {
-    if (!dateStr) return new Date();
-    const d = new Date(dateStr);
-    return isNaN(d.getTime()) ? new Date() : d;
+  const parseDateSafe = (dateStr: string, fallbackDateStr?: string): Date => {
+    if (dateStr) { const d = new Date(dateStr); if (!isNaN(d.getTime())) return d; }
+    if (fallbackDateStr) { const d = new Date(fallbackDateStr); if (!isNaN(d.getTime())) return d; }
+    return new Date();
   };
   const openTrip = (tripId: string) => {
     setActiveTripId(tripId);
@@ -408,6 +458,14 @@ export default function App() {
   const activeTrip = trips.find((x) => x.id === activeTripId);
   const activeCategory = activeTrip?.categories.find((c) => c.id === activeCategoryId);
 
+  const getCategoryDisplayName = (category: Category): string => {
+    if (DEFAULT_CATEGORY_IDS.has(category.id)) {
+      const match = t.defaultCategories.find((dc: Category) => dc.id === category.id);
+      if (match) return match.name;
+    }
+    return category.name;
+  };
+
   const getDaysDiff = (dateStr: string) => {
     if (!dateStr) return 0;
     const today = new Date();
@@ -417,11 +475,17 @@ export default function App() {
   };
 
   const getTripStatus = (startDate: string, endDate: string) => {
+    if (!startDate && !endDate) return { status: 'upcoming', text: lang === 'zh' ? '待规划' : 'Draft', badgeStyle: styles.statusUpcoming, textStyle: styles.statusTextUpcoming };
     const startDiff = getDaysDiff(startDate);
-    const endDiff = getDaysDiff(endDate);
+    const endDiff = getDaysDiff(endDate || startDate);
     if (startDiff > 0) return { status: 'upcoming', text: `${startDiff} ${t.daysLeft}`, badgeStyle: styles.statusUpcoming, textStyle: styles.statusTextUpcoming };
     if (endDiff >= 0) return { status: 'ongoing', text: t.ongoing, badgeStyle: styles.statusOngoing, textStyle: styles.statusTextOngoing };
     return { status: 'past', text: `${Math.abs(endDiff)} ${t.daysAgo}`, badgeStyle: styles.statusPast, textStyle: styles.statusTextPast };
+  };
+
+  const getTripDatesDisplay = (trip: Trip) => {
+    if (!trip.startDate && !trip.endDate) return t.dateOnlyPlaceholder;
+    return `${formatDateDisplay(trip.startDate)}${trip.endDate ? ` → ${formatDateDisplay(trip.endDate)}` : ''}`;
   };
 
   const getProgress = (trip: Trip, categoryId: string) => {
@@ -432,7 +496,7 @@ export default function App() {
   };
 
   const handleAddTrip = () => {
-    if (!newTripData.destination || !newTripData.startDate) return;
+    if (!newTripData.destination) return;
     let categories = [...t.defaultCategories];
     let items: Record<string, Item[]> = {};
     if (templateTripId) {
@@ -457,7 +521,7 @@ export default function App() {
   };
 
   const handleSaveTripInfo = () => {
-    if (!activeTripId || !editTripData.destination || !editTripData.startDate) return;
+    if (!activeTripId || !editTripData.destination) return;
     setTrips(trips.map((x) => (x.id === activeTripId ? { ...x, destination: editTripData.destination, startDate: editTripData.startDate, endDate: editTripData.endDate, icon: editTripData.icon, color: editTripData.color } : x)));
     setScreen('home');
   };
@@ -524,10 +588,10 @@ export default function App() {
       id: Date.now().toString(),
       amount: Number(newExpenseData.amount),
       description: newExpenseData.description,
-      currency: newExpenseData.currency || '¥',
+      currency: newExpenseData.currency || '£',
     };
     setTrips(trips.map((x) => (x.id === activeTripId ? { ...x, expenses: [...(x.expenses || []), newExpense] } : x)));
-    setNewExpenseData({ amount: 0, description: '', currency: newExpenseData.currency || '¥' });
+    setNewExpenseData({ amount: 0, description: '', currency: newExpenseData.currency || '£' });
   };
 
   const handleDeleteExpense = (expenseId: string) => {
@@ -550,17 +614,33 @@ export default function App() {
 
   const handleDeleteCategory = () => {
     if (!activeTripId || !activeCategoryId) return;
-    setTrips(trips.map((trip) => {
-      if (trip.id !== activeTripId) return trip;
-      const newItems = { ...trip.items };
-      delete newItems[activeCategoryId];
-      return { ...trip, categories: trip.categories.filter((c) => c.id !== activeCategoryId), items: newItems };
-    }));
-    setScreen('home');
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    const catName = activeCategory ? getCategoryDisplayName(activeCategory) : '';
+    const itemCount = activeTrip?.items[activeCategoryId]?.length || 0;
+    const message = lang === 'zh'
+      ? `确定删除「${catName}」分类${itemCount > 0 ? `及其 ${itemCount} 个项目` : ''}？此操作不可撤销。`
+      : `Delete "${catName}"${itemCount > 0 ? ` and its ${itemCount} item${itemCount > 1 ? 's' : ''}` : ''}? This cannot be undone.`;
+    Alert.alert(
+      lang === 'zh' ? '删除分类' : 'Delete Category',
+      message,
+      [
+        { text: t.cancel, style: 'cancel' },
+        { text: lang === 'zh' ? '删除' : 'Delete', style: 'destructive', onPress: () => {
+          setTrips(trips.map((trip) => {
+            if (trip.id !== activeTripId) return trip;
+            const newItems = { ...trip.items };
+            delete newItems[activeCategoryId];
+            return { ...trip, categories: trip.categories.filter((c) => c.id !== activeCategoryId), items: newItems };
+          }));
+          setScreen('home');
+        }},
+      ]
+    );
   };
 
   const handleToggleItem = (itemId: string) => {
     if (!activeTripId || !activeCategoryId) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setTrips(trips.map((trip) => {
       if (trip.id !== activeTripId) return trip;
       return {
@@ -575,6 +655,7 @@ export default function App() {
 
   const handleDeleteItem = (itemId: string) => {
     if (!activeTripId || !activeCategoryId) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     setTrips(trips.map((trip) => {
       if (trip.id !== activeTripId) return trip;
       return {
@@ -586,6 +667,7 @@ export default function App() {
 
   const handleMoveItem = (itemId: string, direction: 'up' | 'down') => {
     if (!activeTripId || !activeCategoryId) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setTrips(trips.map((trip) => {
       if (trip.id !== activeTripId) return trip;
       const list = [...(trip.items[activeCategoryId] || [])];
@@ -622,7 +704,7 @@ export default function App() {
           ...trip.items,
           [activeCategoryId]: trip.items[activeCategoryId].map((item) =>
             item.id === editingItem.id
-              ? { ...item, text: editingItem.text.trim(), link: editingItem.link.trim() || undefined, notes: editingItem.notes.trim() || undefined }
+              ? { ...item, text: editingItem.text.trim(), link: undefined, notes: editingItem.notes.trim() || undefined }
               : item
           ),
         },
@@ -653,6 +735,7 @@ export default function App() {
 
   const handleAddInlineItem = () => {
     if (!inlineItemText.trim() || !activeTripId || !activeCategoryId) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const newItems = addItemsFromText(inlineItemText);
     setTrips(trips.map((trip) => {
       if (trip.id !== activeTripId) return trip;
@@ -667,8 +750,26 @@ export default function App() {
     setScreen('trips');
   };
 
+  const handleDeleteTrip = () => {
+    if (!activeTripId) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    Alert.alert(
+      t.deleteTrip,
+      t.deleteTripConfirm,
+      [
+        { text: t.cancel, style: 'cancel' },
+        { text: lang === 'zh' ? '删除' : 'Delete', style: 'destructive', onPress: () => {
+          setTrips(trips.filter((x) => x.id !== activeTripId));
+          setActiveTripId(null);
+          setScreen('trips');
+        }},
+      ]
+    );
+  };
+
   const handleReorderCategories = useCallback(({ data }: { data: Category[] }) => {
     if (!activeTripId) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setTrips(prev => prev.map(x => x.id === activeTripId ? { ...x, categories: data } : x));
   }, [activeTripId]);
 
@@ -715,7 +816,10 @@ export default function App() {
         const parts = [a.name, a.address, a.checkIn ? `Check-in: ${formatDateDisplay(a.checkIn)}` : '', a.checkOut ? `Check-out: ${formatDateDisplay(a.checkOut)}` : ''].filter(Boolean);
         if (parts.length) accContext += `\n- ${parts.join(', ')}`;
       });
-      const prompt = `You are an expert travel planner. Create a detailed, day-by-day itinerary for a trip to ${activeTrip.destination}.\nThe trip is from ${activeTrip.startDate} to ${activeTrip.endDate || 'unknown end date'}.${transportContext ? `\n\nTransport details:${transportContext}` : ''}${accContext ? `\n\nAccommodation details:${accContext}` : ''}\n\nHere are items from the user's checklists:${itemsContext}\n\nPlan the itinerary around the actual transport schedule and hotel locations. If the destination is Xi'an, China, recommend famous local food (Roujiamo, Biangbiang noodles, Yangrou Paomo) and places (Terracotta Army, City Wall, Muslim Quarter).\n\nUse this exact format for easy reading:\n- Start each day with "Day X:" or "第X天：" as a clear header\n- Use short bullet points (one line each, start with "-")\n- Add a blank line between days\n- Keep bullets concise (under 80 chars when possible)\n- Group by time: Morning / Afternoon / Evening when helpful\n\nRespond in ${lang === 'zh' ? 'Chinese' : 'English'}.`;
+      const dateRange = activeTrip.startDate
+        ? `from ${activeTrip.startDate} to ${activeTrip.endDate || 'unknown end date'}`
+        : 'dates not yet decided';
+      const prompt = `You are an expert travel planner. Create a detailed, day-by-day itinerary for a trip to ${activeTrip.destination}.\nThe trip is ${dateRange}.${transportContext ? `\n\nTransport details:${transportContext}` : ''}${accContext ? `\n\nAccommodation details:${accContext}` : ''}\n\nHere are items from the user's checklists:${itemsContext}\n\nPlan the itinerary around the actual transport schedule and hotel locations. Recommend famous local food and must-see attractions for the destination.\n\nUse this exact format for easy reading:\n- Start each day with "Day X:" or "第X天：" as a clear header\n- Use short bullet points (one line each, start with "-")\n- Add a blank line between days\n- Keep bullets concise (under 80 chars when possible)\n- Group by time: Morning / Afternoon / Evening when helpful\n\nRespond in ${lang === 'zh' ? 'Chinese' : 'English'}.`;
       const fullText = await generateItinerary(prompt);
       const charsPerTick = Math.max(2, Math.ceil(fullText.length / 100));
       let pos = 0;
@@ -743,7 +847,7 @@ export default function App() {
       const existingCategories = activeTrip?.categories || [];
       const categoryNames = existingCategories.map(c => c.name).join(', ');
       const currentCategoryContext = (screen === 'list' && activeCategory)
-        ? `\nThe user is currently viewing the "${activeCategory.name}" category. If the item doesn't explicitly belong to another category, put it in "${activeCategory.name}".`
+        ? `\nThe user is currently viewing the "${getCategoryDisplayName(activeCategory)}" category. If the item doesn't explicitly belong to another category, put it in "${getCategoryDisplayName(activeCategory)}".`
         : '';
       const systemPrompt = `You are a travel assistant. The user is dictating items to add to their travel checklist.\nExtract the items they want to add.\nExisting categories: ${categoryNames}.${currentCategoryContext}\nIf an item fits an existing category, use that exact category name.\nIf it doesn't fit, suggest a short new category name and a single emoji for categoryIcon (like 🍜, 📍, 🚌, 💊, etc.).`;
       const itemsToAdd = await processVoiceAudio(base64Audio, mimeType, systemPrompt);
@@ -810,7 +914,12 @@ export default function App() {
     }
   };
 
-  const sortedTrips = [...trips].sort((a, b) => (sortMode === 'upcoming' ? new Date(a.startDate).getTime() - new Date(b.startDate).getTime() : 0));
+  const sortedTrips = [...trips].sort((a, b) => {
+    if (sortMode !== 'upcoming') return 0;
+    const aTime = a.startDate ? new Date(a.startDate).getTime() : Infinity;
+    const bTime = b.startDate ? new Date(b.startDate).getTime() : Infinity;
+    return aTime - bTime;
+  });
   const activeTripsList = sortedTrips.filter((x) => !x.archived);
   const archivedTripsList = sortedTrips.filter((x) => x.archived);
   const upcomingTrips = activeTripsList.filter((x) => getDaysDiff(x.endDate || x.startDate) >= 0);
@@ -925,6 +1034,16 @@ export default function App() {
 
   const showSaveButton = !['share', 'expenses', 'transport_list', 'acc_list'].includes(screen);
 
+  if (!dataLoaded) {
+    return (
+      <GestureHandlerRootView style={styles.flex1}>
+        <SafeAreaView style={[styles.safe, { alignItems: 'center', justifyContent: 'center' }]} edges={['top']}>
+          <ActivityIndicator size="large" color="#007AFF" />
+        </SafeAreaView>
+      </GestureHandlerRootView>
+    );
+  }
+
   return (
     <GestureHandlerRootView style={styles.flex1}>
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -936,6 +1055,7 @@ export default function App() {
           keyboardShouldPersistTaps="handled"
           bounces={true}
           overScrollMode="always"
+          refreshControl={screen === 'trips' ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} /> : undefined}
         >
           {/* --- TRIPS DASHBOARD --- */}
           {screen === 'trips' && (
@@ -968,6 +1088,30 @@ export default function App() {
                 </View>
               </View>
 
+              {trips.length === 0 && (
+                <View style={styles.emptyTrips}>
+                  <View style={styles.emptyTripsIconWrap}>
+                    <Ionicons name="airplane-outline" size={48} color="#007AFF" />
+                  </View>
+                  <Text style={styles.emptyTripsTitle}>{t.emptyTripsTitle}</Text>
+                  <Text style={styles.emptyTripsSub}>{t.emptyTripsSubtitle}</Text>
+                  <View style={styles.emptyTripsHints}>
+                    <View style={styles.emptyTripsHintRow}>
+                      <Ionicons name="checkmark-circle-outline" size={16} color="#22c55e" />
+                      <Text style={styles.emptyTripsHintText}>{t.emptyTripsHint1}</Text>
+                    </View>
+                    <View style={styles.emptyTripsHintRow}>
+                      <Ionicons name="sparkles-outline" size={16} color="#f59e0b" />
+                      <Text style={styles.emptyTripsHintText}>{t.emptyTripsHint2}</Text>
+                    </View>
+                    <View style={styles.emptyTripsHintRow}>
+                      <Ionicons name="share-outline" size={16} color="#3b82f6" />
+                      <Text style={styles.emptyTripsHintText}>{t.emptyTripsHint3}</Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+
               <View style={styles.tripList}>
                 {sortMode === 'manual' ? (
                   activeTripsList.map((trip) => {
@@ -984,7 +1128,7 @@ export default function App() {
                           </View>
                           <View style={styles.tripCardDates}>
                             <Ionicons name="calendar-outline" size={14} color="rgba(255,255,255,0.8)" />
-                            <Text style={styles.tripCardDatesText}>{formatDateDisplay(trip.startDate)} {trip.endDate ? `→ ${formatDateDisplay(trip.endDate)}` : ''}</Text>
+                            <Text style={styles.tripCardDatesText}>{getTripDatesDisplay(trip)}</Text>
                           </View>
                         </View>
                       </Pressable>
@@ -1007,7 +1151,7 @@ export default function App() {
                                 </View>
                                 <View style={styles.tripCardDates}>
                                   <Ionicons name="calendar-outline" size={14} color="rgba(255,255,255,0.8)" />
-                                  <Text style={styles.tripCardDatesText}>{formatDateDisplay(trip.startDate)} {trip.endDate ? `→ ${formatDateDisplay(trip.endDate)}` : ''}</Text>
+                                  <Text style={styles.tripCardDatesText}>{getTripDatesDisplay(trip)}</Text>
                                 </View>
                               </View>
                             </Pressable>
@@ -1025,7 +1169,7 @@ export default function App() {
                               <Text style={styles.tripCardTitle} numberOfLines={1}>{trip.destination}</Text>
                               <View style={styles.tripCardDates}>
                                 <Ionicons name="calendar-outline" size={14} color="rgba(255,255,255,0.8)" />
-                                <Text style={styles.tripCardDatesText}>{formatDateDisplay(trip.startDate)} {trip.endDate ? `→ ${formatDateDisplay(trip.endDate)}` : ''}</Text>
+                                <Text style={styles.tripCardDatesText}>{getTripDatesDisplay(trip)}</Text>
                               </View>
                             </View>
                           </Pressable>
@@ -1048,7 +1192,7 @@ export default function App() {
                           <Text style={styles.tripCardTitleArchived} numberOfLines={1}>{trip.destination}</Text>
                           <View style={styles.tripCardDatesArchived}>
                             <Ionicons name="calendar-outline" size={14} color="#6b7280" />
-                            <Text style={styles.tripCardDatesTextArchived}>{formatDateDisplay(trip.startDate)}</Text>
+                            <Text style={styles.tripCardDatesTextArchived}>{trip.startDate ? formatDateDisplay(trip.startDate) : t.dateOnlyPlaceholder}</Text>
                           </View>
                         </View>
                       </Pressable>
@@ -1073,9 +1217,6 @@ export default function App() {
               </View>
 
               <Pressable onPress={() => { setEditTripData({ destination: activeTrip.destination, startDate: activeTrip.startDate, endDate: activeTrip.endDate || '', icon: activeTrip.icon || '✈️', color: activeTrip.color || '#039BE5' }); setScreen('edit_trip'); }} style={[styles.tripInfoCard, getBgStyle(activeTrip.color)]}>
-                <View style={styles.tripInfoCardEditIcon}>
-                  <Ionicons name="pencil" size={18} color="rgba(255,255,255,0.9)" />
-                </View>
                 <View style={styles.tripInfoHeader}>
                   <View style={styles.tripInfoTitleRow}>
                     <View style={styles.tripInfoIconWrap}><Text style={styles.tripInfoEmoji}>{getTripEmoji(activeTrip.icon)}</Text></View>
@@ -1086,9 +1227,15 @@ export default function App() {
                   </View>
                 </View>
                 <View style={styles.tripInfoDatesBar}>
-                  <Text style={styles.tripInfoDatesText}>{formatDateDisplay(activeTrip.startDate)}</Text>
-                  <Text style={styles.tripInfoDatesArrow}>→</Text>
-                  <Text style={styles.tripInfoDatesText}>{activeTrip.endDate ? formatDateDisplay(activeTrip.endDate) : '?'}</Text>
+                  {!activeTrip.startDate && !activeTrip.endDate ? (
+                    <Text style={styles.tripInfoDatesText}>{t.dateOnlyPlaceholder}</Text>
+                  ) : (
+                    <>
+                      <Text style={styles.tripInfoDatesText}>{formatDateDisplay(activeTrip.startDate)}</Text>
+                      <Text style={styles.tripInfoDatesArrow}>→</Text>
+                      <Text style={styles.tripInfoDatesText}>{activeTrip.endDate ? formatDateDisplay(activeTrip.endDate) : '?'}</Text>
+                    </>
+                  )}
                 </View>
               </Pressable>
 
@@ -1101,7 +1248,6 @@ export default function App() {
                           <Ionicons name="train-outline" size={16} color="#3b82f6" />
                           <Text style={[styles.infoCardLabel, { color: '#3b82f6' }]}>{t.flight}</Text>
                         </View>
-                        <View style={styles.infoCardBadge}><Text style={styles.infoCardBadgeText}>{(activeTrip.transports || []).length}</Text></View>
                       </View>
                       <Text style={styles.infoCardValue} numberOfLines={1}>{activeTrip.transports![0].type} {activeTrip.transports![0].flightNumber}</Text>
                       <Text style={styles.infoCardSub} numberOfLines={1}>
@@ -1111,7 +1257,7 @@ export default function App() {
                   ) : (
                     <View style={styles.infoCardEmpty}>
                       <View style={styles.infoCardIconWrapEmpty}><Ionicons name="train-outline" size={24} color="#9ca3af" /></View>
-                      <Text style={styles.infoCardEmptyText}>{t.addFlight}</Text>
+                      <Text style={styles.infoCardEmptyText}>{t.addFlightEmpty}</Text>
                     </View>
                   )}
                 </Pressable>
@@ -1124,7 +1270,6 @@ export default function App() {
                           <Ionicons name="bed-outline" size={16} color="#f97316" />
                           <Text style={[styles.infoCardLabel, { color: '#f97316' }]}>{t.accommodation}</Text>
                         </View>
-                        <View style={[styles.infoCardBadge, { backgroundColor: '#fff7ed' }]}><Text style={[styles.infoCardBadgeText, { color: '#f97316' }]}>{(activeTrip.accommodations || []).length}</Text></View>
                       </View>
                       <Text style={styles.infoCardValue} numberOfLines={1}>{activeTrip.accommodations![0].name}</Text>
                       <Text style={styles.infoCardSub} numberOfLines={1}>
@@ -1134,36 +1279,34 @@ export default function App() {
                   ) : (
                     <View style={styles.infoCardEmpty}>
                       <View style={styles.infoCardIconWrapEmpty}><Ionicons name="bed-outline" size={24} color="#9ca3af" /></View>
-                      <Text style={styles.infoCardEmptyText}>{t.addAcc}</Text>
+                      <Text style={styles.infoCardEmptyText}>{t.addAccEmpty}</Text>
                     </View>
                   )}
                 </Pressable>
 
-                <View style={styles.infoCard}>
+                <Pressable onPress={() => { setEditNotesData(activeTrip.notes || ''); setScreen('notes'); }} style={styles.infoCard}>
                   {activeTrip.notes ? (
                     <>
                       <View style={styles.infoCardHeader}>
                         <View style={styles.infoCardIconWrap}><Ionicons name="document-text-outline" size={16} color="#a855f7" /></View>
                         <Text style={[styles.infoCardLabel, { color: '#a855f7' }]}>{t.notes}</Text>
-                        <Pressable onPress={() => { setEditNotesData(activeTrip.notes || ''); setScreen('notes'); }}><Ionicons name="create-outline" size={14} color="#9ca3af" /></Pressable>
                       </View>
                       <Text style={styles.infoCardSub} numberOfLines={3}>{activeTrip.notes}</Text>
                     </>
                   ) : (
-                    <Pressable onPress={() => { setEditNotesData(''); setScreen('notes'); }} style={styles.infoCardEmpty}>
+                    <View style={styles.infoCardEmpty}>
                       <View style={styles.infoCardIconWrapEmpty}><Ionicons name="document-text-outline" size={24} color="#9ca3af" /></View>
                       <Text style={styles.infoCardEmptyText}>{t.notes}</Text>
-                    </Pressable>
+                    </View>
                   )}
-                </View>
+                </Pressable>
 
-                <View style={styles.infoCard}>
+                <Pressable onPress={() => setScreen('expenses')} style={styles.infoCard}>
                   {activeTrip.expenses && activeTrip.expenses.length > 0 ? (
                     <>
                       <View style={styles.infoCardHeader}>
                         <View style={styles.infoCardIconWrap}><Ionicons name="cash-outline" size={16} color="#22c55e" /></View>
                         <Text style={[styles.infoCardLabel, { color: '#22c55e' }]}>{t.expenses}</Text>
-                        <Pressable onPress={() => setScreen('expenses')}><Ionicons name="create-outline" size={14} color="#9ca3af" /></Pressable>
                       </View>
                       <Text style={styles.infoCardValue}>
                         {activeTrip.expenses[0].currency}{activeTrip.expenses.reduce((sum, e) => sum + e.amount, 0).toLocaleString()}
@@ -1171,12 +1314,12 @@ export default function App() {
                       <Text style={styles.infoCardSub}>{activeTrip.expenses.length} items</Text>
                     </>
                   ) : (
-                    <Pressable onPress={() => setScreen('expenses')} style={styles.infoCardEmpty}>
+                    <View style={styles.infoCardEmpty}>
                       <View style={styles.infoCardIconWrapEmpty}><Ionicons name="cash-outline" size={24} color="#9ca3af" /></View>
                       <Text style={styles.infoCardEmptyText}>{t.expenses}</Text>
-                    </Pressable>
+                    </View>
                   )}
-                </View>
+                </Pressable>
               </View>
 
               {/* Tab switcher */}
@@ -1201,7 +1344,7 @@ export default function App() {
                       return (
                         <Pressable key={category.id} onPress={() => { setActiveCategoryId(category.id); setScreen('list'); }} style={styles.categoryCard}>
                           <View style={[styles.categoryDot, getBgStyle(category.color)]} />
-                          <Text style={styles.categoryName} numberOfLines={1}>{category.name}</Text>
+                          <Text style={styles.categoryName} numberOfLines={1}>{getCategoryDisplayName(category)}</Text>
                           <Text style={styles.categoryCount}>{completed}/{total}</Text>
                           <View style={styles.progressBar}>
                             <View style={[styles.progressFill, getBgStyle(category.color), { width: `${progress}%` }]} />
@@ -1252,6 +1395,10 @@ export default function App() {
                       <Text style={styles.secondaryButtonText}>{activeTrip.archived ? t.unarchive : t.archive}</Text>
                     </Pressable>
                   </View>
+                  <Pressable onPress={handleDeleteTrip} style={styles.deleteTripButton}>
+                    <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                    <Text style={styles.deleteTripButtonText}>{t.deleteTrip}</Text>
+                  </Pressable>
                 </>
               ) : (
                 <View style={styles.aiPlannerCard}>
@@ -1296,14 +1443,17 @@ export default function App() {
                       </View>
                       {aiItinerary ? (
                         <View style={styles.aiResultContent}>
-                          {parseItineraryBlocks(aiItinerary).map((block, i) => (
-                            <View key={i} style={block.type === 'day' ? styles.aiDayBlock : block.type === 'bullet' ? styles.aiBulletBlock : styles.aiParagraphBlock}>
-                              {block.type === 'bullet' && <Text style={styles.aiBullet}>•</Text>}
-                              <Text style={block.type === 'day' ? styles.aiDayText : block.type === 'bullet' ? styles.aiBulletText : styles.aiParagraphText} selectable>
-                                {block.text}{i === parseItineraryBlocks(aiItinerary).length - 1 && isGeneratingItinerary ? ' ▍' : ''}
-                              </Text>
-                            </View>
-                          ))}
+                          {(() => {
+                            const blocks = parseItineraryBlocks(aiItinerary);
+                            return blocks.map((block, i) => (
+                              <View key={i} style={block.type === 'day' ? styles.aiDayBlock : block.type === 'bullet' ? styles.aiBulletBlock : styles.aiParagraphBlock}>
+                                {block.type === 'bullet' && <Text style={styles.aiBullet}>•</Text>}
+                                <Text style={block.type === 'day' ? styles.aiDayText : block.type === 'bullet' ? styles.aiBulletText : styles.aiParagraphText} selectable>
+                                  {block.text}{i === blocks.length - 1 && isGeneratingItinerary ? ' ▍' : ''}
+                                </Text>
+                              </View>
+                            ));
+                          })()}
                         </View>
                       ) : (
                         <Text style={styles.aiResultText} selectable>
@@ -1373,7 +1523,7 @@ export default function App() {
               <View style={styles.listContent}>
                 <View style={styles.listHeader}>
                   <View style={[styles.listCategoryDot, getBgStyle(activeCategory.color)]} />
-                  <Text style={styles.listTitle}>{activeCategory.name}</Text>
+                  <Text style={styles.listTitle}>{getCategoryDisplayName(activeCategory)}</Text>
                 </View>
 
                 <View style={styles.itemListCard}>
@@ -1386,32 +1536,33 @@ export default function App() {
                     (activeTrip.items[activeCategory.id] || []).map((item, index) => {
                       const listLength = (activeTrip.items[activeCategory.id] || []).length;
                       return (
-                        <View key={item.id} style={styles.itemRow}>
-                          <Pressable onPress={() => handleToggleItem(item.id)} style={[styles.checkbox, item.completed && getBgStyle(activeCategory.color)]}>
-                            {item.completed && <Ionicons name="checkmark" size={14} color="#fff" />}
-                          </Pressable>
-                          <Text style={[styles.itemText, item.completed && styles.itemTextCompleted]} numberOfLines={2}>{item.text}</Text>
-                          <View style={styles.itemSortGroup}>
-                            <Pressable onPress={() => handleMoveItemToEdge(item.id, true)} style={styles.itemSortBtn} disabled={index === 0}>
-                              <Ionicons name="arrow-up-circle-outline" size={22} color={index === 0 ? '#d1d5db' : '#6b7280'} />
+                        <Swipeable
+                          key={item.id}
+                          renderRightActions={() => (
+                            <Pressable onPress={() => handleDeleteItem(item.id)} style={styles.swipeDeleteAction}>
+                              <Ionicons name="trash-outline" size={22} color="#fff" />
                             </Pressable>
-                            <Pressable onPress={() => handleMoveItem(item.id, 'up')} style={styles.itemSortBtn} disabled={index === 0}>
-                              <Ionicons name="chevron-up" size={20} color={index === 0 ? '#d1d5db' : '#6b7280'} />
+                          )}
+                          overshootRight={false}
+                        >
+                          <View style={styles.itemRow}>
+                            <Pressable onPress={() => handleToggleItem(item.id)} style={[styles.checkbox, item.completed && getBgStyle(activeCategory.color)]}>
+                              {item.completed && <Ionicons name="checkmark" size={14} color="#fff" />}
                             </Pressable>
-                            <Pressable onPress={() => handleMoveItem(item.id, 'down')} style={styles.itemSortBtn} disabled={index === listLength - 1}>
-                              <Ionicons name="chevron-down" size={20} color={index === listLength - 1 ? '#d1d5db' : '#6b7280'} />
-                            </Pressable>
-                            <Pressable onPress={() => handleMoveItemToEdge(item.id, false)} style={styles.itemSortBtn} disabled={index === listLength - 1}>
-                              <Ionicons name="arrow-down-circle-outline" size={22} color={index === listLength - 1 ? '#d1d5db' : '#6b7280'} />
+                            <Text style={[styles.itemText, item.completed && styles.itemTextCompleted]} numberOfLines={2}>{item.text}</Text>
+                            <View style={styles.itemSortGroup}>
+                              <Pressable onPress={() => handleMoveItem(item.id, 'up')} style={styles.itemSortBtn} disabled={index === 0}>
+                                <Ionicons name="chevron-up" size={20} color={index === 0 ? '#d1d5db' : '#6b7280'} />
+                              </Pressable>
+                              <Pressable onPress={() => handleMoveItem(item.id, 'down')} style={styles.itemSortBtn} disabled={index === listLength - 1}>
+                                <Ionicons name="chevron-down" size={20} color={index === listLength - 1 ? '#d1d5db' : '#6b7280'} />
+                              </Pressable>
+                            </View>
+                            <Pressable onPress={() => { setEditingItem({ id: item.id, text: item.text, link: '', notes: [item.link, item.notes].filter(Boolean).join('\n') }); setScreen('edit_item'); }} style={styles.itemLinkBtn}>
+                              <Ionicons name={item.link || item.notes ? "document-text-outline" : "create-outline"} size={20} color={item.link || item.notes ? "#007AFF" : "#9ca3af"} />
                             </Pressable>
                           </View>
-                          <Pressable onPress={() => { setEditingItem({ id: item.id, text: item.text, link: item.link || '', notes: item.notes || '' }); setScreen('edit_item'); }} style={styles.itemLinkBtn}>
-                            <Ionicons name={item.link || item.notes ? "link-outline" : "create-outline"} size={20} color={item.link || item.notes ? "#007AFF" : "#9ca3af"} />
-                          </Pressable>
-                          <Pressable onPress={() => handleDeleteItem(item.id)} style={styles.deleteItemBtn}>
-                            <Ionicons name="trash-outline" size={20} color="#ef4444" />
-                          </Pressable>
-                        </View>
+                        </Swipeable>
                       );
                     })
                   )}
@@ -1542,36 +1693,15 @@ export default function App() {
                     />
                   </View>
                   <View style={styles.inputRow}>
-                    <Ionicons name="link-outline" size={20} color="#9ca3af" />
-                    <TextInput
-                      value={editingItem.link}
-                      onChangeText={(link) => setEditingItem({ ...editingItem, link })}
-                      placeholder={t.linkPlaceholder}
-                      style={styles.inputFlex}
-                      placeholderTextColor="#9ca3af"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      keyboardType="url"
-                    />
-                  </View>
-                  {editingItem.link.trim() !== '' && (
-                    <View style={styles.inputRow}>
-                      <Pressable style={styles.openLinkButton} onPress={() => { try { Linking.openURL(editingItem.link.trim().startsWith('http') ? editingItem.link.trim() : 'https://' + editingItem.link.trim()); } catch (_) {} }}>
-                        <Ionicons name="open-outline" size={18} color="#007AFF" />
-                        <Text style={styles.openLinkText}>{lang === 'zh' ? '打开链接' : 'Open link'}</Text>
-                      </Pressable>
-                    </View>
-                  )}
-                  <View style={styles.inputRow}>
                     <Ionicons name="document-text-outline" size={20} color="#9ca3af" />
                     <TextInput
                       value={editingItem.notes}
                       onChangeText={(notes) => setEditingItem({ ...editingItem, notes })}
-                      placeholder={t.notesLabel}
+                      placeholder={lang === 'zh' ? '备注（地址、链接、提醒等）' : 'Notes (address, link, reminder, etc.)'}
                       style={[styles.inputFlex, styles.notesInputInline]}
                       placeholderTextColor="#9ca3af"
                       multiline
-                      numberOfLines={3}
+                      numberOfLines={4}
                     />
                   </View>
                 </View>
@@ -1600,15 +1730,7 @@ export default function App() {
                       placeholderTextColor="#9ca3af"
                     />
                   </View>
-                  <EmojiPicker
-                    onEmojiSelected={(e) => {
-                      screen === 'add_trip' ? setNewTripData({ ...newTripData, icon: e.emoji }) : setEditTripData({ ...editTripData, icon: e.emoji });
-                    }}
-                    open={showEmojiPicker}
-                    onClose={() => setShowEmojiPicker(false)}
-                    enableSearchBar
-                    enableRecentlyUsed
-                  />
+{/* EmojiPicker rendered at top level to avoid ScrollView/Modal conflicts */}
                   <View style={styles.colorRow}>
                     {COLORS.map((c) => (
                       <Pressable key={c} onPress={() => (screen === 'add_trip' ? setNewTripData({ ...newTripData, color: c }) : setEditTripData({ ...editTripData, color: c }))} style={[styles.colorChip, getBgStyle(c), (screen === 'add_trip' ? newTripData.color : editTripData.color) === c && styles.colorChipSelected]}>
@@ -1776,7 +1898,7 @@ export default function App() {
                     {Platform.OS === 'web' ? (
                       <TextInput value={editTransportData.departureTime} onChangeText={(v) => setEditTransportData({ ...editTransportData, departureTime: v })} placeholder={t.dateOnlyPlaceholder} style={styles.inputFlex} placeholderTextColor="#9ca3af" />
                     ) : (
-                      <Pressable style={styles.datePressable} onPress={() => { setPendingDate(parseDateSafe(editTransportData.departureTime)); setOpenDatePicker('dep'); }}>
+                      <Pressable style={styles.datePressable} onPress={() => { setPendingDate(parseDateSafe(editTransportData.departureTime, activeTrip?.startDate)); setOpenDatePicker('dep'); }}>
                         <Text style={[styles.inputFlex, editTransportData.departureTime ? styles.dateText : styles.datePlaceholder]}>
                           {editTransportData.departureTime ? formatDateDisplay(editTransportData.departureTime) : t.dateOnlyPlaceholder}
                         </Text>
@@ -1788,7 +1910,7 @@ export default function App() {
                     {Platform.OS === 'web' ? (
                       <TextInput value={editTransportData.arrivalTime} onChangeText={(v) => setEditTransportData({ ...editTransportData, arrivalTime: v })} placeholder={t.dateOnlyPlaceholder} style={styles.inputFlex} placeholderTextColor="#9ca3af" />
                     ) : (
-                      <Pressable style={styles.datePressable} onPress={() => { setPendingDate(parseDateSafe(editTransportData.arrivalTime)); setOpenDatePicker('arr'); }}>
+                      <Pressable style={styles.datePressable} onPress={() => { setPendingDate(parseDateSafe(editTransportData.arrivalTime, activeTrip?.startDate)); setOpenDatePicker('arr'); }}>
                         <Text style={[styles.inputFlex, editTransportData.arrivalTime ? styles.dateText : styles.datePlaceholder]}>
                           {editTransportData.arrivalTime ? formatDateDisplay(editTransportData.arrivalTime) : t.dateOnlyPlaceholder}
                         </Text>
@@ -1813,7 +1935,7 @@ export default function App() {
                     {Platform.OS === 'web' ? (
                       <TextInput value={editAccData.checkIn} onChangeText={(v) => setEditAccData({ ...editAccData, checkIn: v })} placeholder={t.dateOnlyPlaceholder} style={styles.inputFlex} placeholderTextColor="#9ca3af" />
                     ) : (
-                      <Pressable style={styles.datePressable} onPress={() => { setPendingDate(parseDateSafe(editAccData.checkIn)); setOpenDatePicker('checkIn'); }}>
+                      <Pressable style={styles.datePressable} onPress={() => { setPendingDate(parseDateSafe(editAccData.checkIn, activeTrip?.startDate)); setOpenDatePicker('checkIn'); }}>
                         <Text style={[styles.inputFlex, editAccData.checkIn ? styles.dateText : styles.datePlaceholder]}>
                           {editAccData.checkIn ? formatDateDisplay(editAccData.checkIn) : t.dateOnlyPlaceholder}
                         </Text>
@@ -1825,7 +1947,7 @@ export default function App() {
                     {Platform.OS === 'web' ? (
                       <TextInput value={editAccData.checkOut} onChangeText={(v) => setEditAccData({ ...editAccData, checkOut: v })} placeholder={t.dateOnlyPlaceholder} style={styles.inputFlex} placeholderTextColor="#9ca3af" />
                     ) : (
-                      <Pressable style={styles.datePressable} onPress={() => { setPendingDate(parseDateSafe(editAccData.checkOut)); setOpenDatePicker('checkOut'); }}>
+                      <Pressable style={styles.datePressable} onPress={() => { setPendingDate(parseDateSafe(editAccData.checkOut, activeTrip?.endDate || activeTrip?.startDate)); setOpenDatePicker('checkOut'); }}>
                         <Text style={[styles.inputFlex, editAccData.checkOut ? styles.dateText : styles.datePlaceholder]}>
                           {editAccData.checkOut ? formatDateDisplay(editAccData.checkOut) : t.dateOnlyPlaceholder}
                         </Text>
@@ -1848,7 +1970,7 @@ export default function App() {
                       <Ionicons name="cash-outline" size={20} color="#9ca3af" />
                       <View style={styles.currencyRow}>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.currencyScroll}>
-                          {['¥', '$', '€', '£', '₩', '฿', 'HK$'].map((curr) => (
+                          {['£', '$', '€', '¥', '₩', '฿', 'A$', 'HK$'].map((curr) => (
                             <Pressable key={curr} onPress={() => setNewExpenseData({ ...newExpenseData, currency: curr })} style={[styles.currencyChip, newExpenseData.currency === curr && styles.currencyChipActive]}>
                               <Text style={styles.currencyChipText}>{curr}</Text>
                             </Pressable>
@@ -1937,6 +2059,22 @@ export default function App() {
         )}
       </KeyboardAvoidingView>
     </SafeAreaView>
+    <EmojiPicker
+      onEmojiSelected={(e) => {
+        const emoji = (e && typeof e === 'object' && e.emoji) ? e.emoji : '✈️';
+        if (screen === 'add_trip') {
+          setNewTripData(prev => ({ ...prev, icon: emoji }));
+        } else {
+          setEditTripData(prev => ({ ...prev, icon: emoji }));
+        }
+        setShowEmojiPicker(false);
+      }}
+      open={showEmojiPicker}
+      onClose={() => setShowEmojiPicker(false)}
+      onRequestClose={() => setShowEmojiPicker(false)}
+      enableSearchBar
+      enableRecentlyUsed
+    />
     </GestureHandlerRootView>
   );
 }
@@ -1959,25 +2097,32 @@ const styles = StyleSheet.create({
   sortItemTextActive: { color: '#2563eb' },
   langButton: { height: 40, paddingHorizontal: 12, backgroundColor: '#fff', borderRadius: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 2 },
   langText: { fontSize: 14, fontWeight: '600', color: '#374151' },
-  tripList: { gap: 12 },
+  tripList: { gap: 10 },
+  emptyTrips: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 24 },
+  emptyTripsIconWrap: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(0,122,255,0.1)', alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  emptyTripsTitle: { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 8, textAlign: 'center' },
+  emptyTripsSub: { fontSize: 15, color: '#6b7280', textAlign: 'center', marginBottom: 28, lineHeight: 22 },
+  emptyTripsHints: { width: '100%', gap: 14 },
+  emptyTripsHintRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 8 },
+  emptyTripsHintText: { fontSize: 14, color: '#4b5563', flex: 1, lineHeight: 20 },
   section: { marginBottom: 24 },
   sectionTitle: { fontSize: 12, fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12, marginLeft: 4 },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 12, marginLeft: 4 },
-  tripCard: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 3, elevation: 2 },
+  tripCard: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 18, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 3, elevation: 2 },
   tripCardPast: { opacity: 0.85 },
-  tripCardIconWrap: { width: 48, height: 48, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', marginRight: 16 },
-  tripCardEmoji: { fontSize: 26 },
+  tripCardIconWrap: { width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  tripCardEmoji: { fontSize: 22, lineHeight: 26 },
   tripCardBody: { flex: 1 },
-  tripCardTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 },
-  tripCardTitle: { fontSize: 18, fontWeight: '700', color: '#fff' },
-  tripCardBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.2)' },
-  tripCardBadgeText: { fontSize: 12, fontWeight: '700', color: '#fff' },
-  tripCardDates: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  tripCardDatesText: { fontSize: 14, color: 'rgba(255,255,255,0.9)' },
-  tripCardArchived: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 24, backgroundColor: '#e5e7eb', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 2, opacity: 0.8 },
-  tripCardIconWrapArchived: { width: 48, height: 48, borderRadius: 16, backgroundColor: '#9ca3af', alignItems: 'center', justifyContent: 'center', marginRight: 16 },
-  tripCardEmojiArchived: { fontSize: 22 },
-  tripCardTitleArchived: { fontSize: 18, fontWeight: '700', color: '#4b5563', textDecorationLine: 'line-through' },
+  tripCardTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 },
+  tripCardTitle: { fontSize: 16, fontWeight: '700', color: '#fff', flex: 1, marginRight: 8 },
+  tripCardBadge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.25)' },
+  tripCardBadgeText: { fontSize: 11, fontWeight: '700', color: '#fff' },
+  tripCardDates: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  tripCardDatesText: { fontSize: 13, color: 'rgba(255,255,255,0.85)' },
+  tripCardArchived: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 18, backgroundColor: '#e5e7eb', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 2, opacity: 0.8 },
+  tripCardIconWrapArchived: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#9ca3af', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  tripCardEmojiArchived: { fontSize: 20, lineHeight: 24 },
+  tripCardTitleArchived: { fontSize: 16, fontWeight: '700', color: '#4b5563', textDecorationLine: 'line-through' },
   tripCardDatesArchived: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
   tripCardDatesTextArchived: { fontSize: 14, color: '#6b7280' },
   primaryButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#007AFF', paddingVertical: 16, borderRadius: 16, marginTop: 24, gap: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 4 },
@@ -1987,20 +2132,20 @@ const styles = StyleSheet.create({
   navRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, marginTop: 8, paddingHorizontal: 4 },
   backButton: { flexDirection: 'row', alignItems: 'center' },
   backButtonText: { fontSize: 17, fontWeight: '600', color: '#007AFF', marginLeft: 0 },
-  tripInfoCard: { borderRadius: 24, padding: 20, marginBottom: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 3, elevation: 2 },
-  tripInfoCardEditIcon: { position: 'absolute', top: 16, right: 16, zIndex: 10 },
-  tripInfoHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
-  tripInfoTitleRow: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingRight: 32 },
-  tripInfoIconWrap: { marginRight: 12 },
-  tripInfoEmoji: { fontSize: 28 },
-  tripInfoTitle: { fontSize: 22, fontWeight: '700', color: '#fff', flex: 1 },
-  tripInfoBadge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
-  statusUpcoming: { backgroundColor: 'rgba(59,130,246,0.2)' },
-  statusOngoing: { backgroundColor: 'rgba(34,197,94,0.2)' },
-  statusPast: { backgroundColor: 'rgba(107,114,128,0.2)' },
-  statusTextUpcoming: { color: '#2563eb' },
-  statusTextOngoing: { color: '#16a34a' },
-  statusTextPast: { color: '#6b7280' },
+  tripInfoCard: { borderRadius: 20, padding: 16, marginBottom: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 3, elevation: 2 },
+  tripInfoCardEditIcon: { position: 'absolute', top: 12, right: 12, zIndex: 10 },
+  tripInfoHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
+  tripInfoTitleRow: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingRight: 28 },
+  tripInfoIconWrap: { marginRight: 10 },
+  tripInfoEmoji: { fontSize: 24, lineHeight: 30 },
+  tripInfoTitle: { fontSize: 20, fontWeight: '700', color: '#fff', flex: 1 },
+  tripInfoBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16 },
+  statusUpcoming: { backgroundColor: 'rgba(255,255,255,0.25)' },
+  statusOngoing: { backgroundColor: 'rgba(255,255,255,0.25)' },
+  statusPast: { backgroundColor: 'rgba(255,255,255,0.2)' },
+  statusTextUpcoming: { color: '#fff' },
+  statusTextOngoing: { color: '#fff' },
+  statusTextPast: { color: 'rgba(255,255,255,0.8)' },
   tripInfoBadgeText: { fontSize: 14, fontWeight: '700' },
   tripInfoDatesBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', backgroundColor: 'rgba(0,0,0,0.1)', padding: 12, borderRadius: 16 },
   tripInfoDatesText: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.95)' },
@@ -2047,6 +2192,8 @@ const styles = StyleSheet.create({
   secondaryButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', paddingVertical: 14, borderRadius: 16, borderWidth: 1, borderColor: '#e5e7eb', gap: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 2 },
   secondaryButtonText: { fontSize: 16, fontWeight: '600', color: '#374151' },
   secondaryButtonAlt: { backgroundColor: '#e5e7eb' },
+  deleteTripButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, marginTop: 12 },
+  deleteTripButtonText: { fontSize: 15, fontWeight: '600', color: '#ef4444' },
   tripsFooter: { paddingHorizontal: 20, paddingVertical: 16, borderTopWidth: 1, borderTopColor: '#e5e7eb', backgroundColor: '#f9fafb' },
   listScreen: { flex: 1, paddingBottom: 96 },
   navActions: { flexDirection: 'row', gap: 12 },
@@ -2065,6 +2212,7 @@ const styles = StyleSheet.create({
   itemText: { flex: 1, fontSize: 17, color: '#111827' },
   itemTextCompleted: { color: '#9ca3af', textDecorationLine: 'line-through' },
   deleteItemBtn: { padding: 8 },
+  swipeDeleteAction: { backgroundColor: '#ef4444', justifyContent: 'center', alignItems: 'center', width: 72, borderTopRightRadius: 12, borderBottomRightRadius: 12 },
   inlineAddRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 8, marginTop: 12, gap: 8, borderWidth: 1, borderColor: '#e5e7eb' },
   inlineAddInput: { flex: 1, fontSize: 16, color: '#111827', paddingVertical: 10 },
   inlineAddButton: { padding: 4 },
@@ -2092,10 +2240,10 @@ const styles = StyleSheet.create({
   transportTypeScroll: { paddingVertical: 12, paddingHorizontal: 16 },
   transportTypeChip: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#f9fafb', alignItems: 'center', justifyContent: 'center', marginRight: 10 },
   transportTypeChipActive: { backgroundColor: '#dbeafe', borderWidth: 2, borderColor: '#007AFF' },
-  transportTypeEmoji: { fontSize: 24 },
+  transportTypeEmoji: { fontSize: 24, lineHeight: 30 },
   transportTypeSelected: { fontSize: 22, marginRight: 8 },
   emojiPickerButton: { width: 48, height: 48, borderRadius: 12, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center', marginRight: 8 },
-  emojiPickerPreview: { fontSize: 28 },
+  emojiPickerPreview: { fontSize: 28, lineHeight: 34 },
   emojiModalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.3)' },
   emojiModalSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 40 },
   emojiModalHandle: { width: 36, height: 5, backgroundColor: '#d1d5db', borderRadius: 3, alignSelf: 'center', marginTop: 10, marginBottom: 12 },
@@ -2120,10 +2268,10 @@ const styles = StyleSheet.create({
   itemLinkBtn: { padding: 8 },
   itemSortGroup: { flexDirection: 'row', alignItems: 'center' },
   itemSortBtn: { padding: 6 },
-  notesCard: { height: 256 },
+  notesCard: { minHeight: 480 },
   notesInput: { flex: 1, padding: 16, fontSize: 17, textAlignVertical: 'top' },
   currencyRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  currencyScroll: { maxWidth: 120 },
+  currencyScroll: { maxWidth: 200 },
   currencyChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: '#f3f4f6', marginRight: 8 },
   currencyChipActive: { backgroundColor: '#007AFF' },
   currencyChipText: { fontSize: 17, color: '#111827' },
